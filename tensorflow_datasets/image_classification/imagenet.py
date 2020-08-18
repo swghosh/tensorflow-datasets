@@ -35,14 +35,12 @@ illustrate each synset. Images of each concept are quality-controlled and
 human-annotated. In its completion, we hope ImageNet will offer tens of
 millions of cleanly sorted images for most of the concepts in the WordNet
 hierarchy.
-
 The test split contains 100K images but no labels because no labels have been
 publicly released. To assess the accuracy of a model on the ImageNet test split,
 one must run inference on all images in the split, export those results to a
 text file that must be uploaded to the ImageNet evaluation server. The
 maintainers of the ImageNet evaluation server permits a single user to submit up
 to 2 submissions per week in order to prevent overfitting.
-
 To evaluate the accuracy on the test split, one must first create an account at
 image-net.org. This account must be approved by the site administrator. After
 the account is created, one can submit the results to the test server at
@@ -50,14 +48,12 @@ http://www.image-net.org/challenges/LSVRC/2013/test_server
 The submission consists of several ASCII text files corresponding to multiple
 tasks. The task of interest is "Classification submission (top-5 cls error)".
 A sample of an exported text file looks like the following:
-
 ```
 771 778 794 387 650
 363 691 764 923 427
 737 369 430 531 124
 755 930 755 59 168
 ```
-
 The export format is described in full in "readme.txt" within the 2013
 development kit available here:
 http://imagenet.stanford.edu/image/ilsvrc2013/ILSVRC2013_devkit.tgz
@@ -89,6 +85,8 @@ _LABELS_FNAME = 'image_classification/imagenet2012_labels.txt'
 # corresponding image names (and not in the order they have been added to the
 # tar file).
 _VALIDATION_LABELS_FNAME = 'image_classification/imagenet2012_validation_labels.txt'
+
+_MINIVAL_FILENAMES = 'gs://cloud-tpu-checkpoints/efficientnet/eval_data/val_split20.txt'
 
 
 # From https://github.com/cytsai/ilsvrc-cmyk-image-list
@@ -153,11 +151,9 @@ class Imagenet2012(tfds.core.GeneratorBasedBuilder):
   @staticmethod
   def _get_validation_labels(val_path):
     """Returns labels for validation.
-
     Args:
       val_path: path to TAR file containing validation images. It is used to
       retrieve the name of pictures and associate them to labels.
-
     Returns:
       dict, mapping from image name (str) to label (str).
     """
@@ -184,6 +180,13 @@ class Imagenet2012(tfds.core.GeneratorBasedBuilder):
             name=tfds.Split.TRAIN,
             gen_kwargs={
                 'archive': dl_manager.iter_archive(train_path),
+            },
+        ),
+        tfds.core.SplitGenerator(
+            name=tfds.Split('minival'),
+            gen_kwargs={
+                'archive': dl_manager.iter_archive(train_path),
+                'minival': True
             },
         ),
         tfds.core.SplitGenerator(
@@ -220,8 +223,14 @@ class Imagenet2012(tfds.core.GeneratorBasedBuilder):
       image = io.BytesIO(tfds.core.utils.png_to_jpeg(image.read()))
     return image
 
+  def _get_minival_filenames(self):
+    with tf.io.gfile.GFile(_MINIVAL_FILENAMES) as minival_f:
+      # `splitlines` to remove trailing `\r` in Windows
+      image_names = minival_f.read().strip().splitlines()
+    return image_names
+
   def _generate_examples(self, archive, validation_labels=None,
-                         labels_exist=True):
+                         labels_exist=True, minival=False):
     """Yields examples."""
     if not labels_exist:  # Test split
       for key, example in self._generate_examples_test(archive):
@@ -230,6 +239,8 @@ class Imagenet2012(tfds.core.GeneratorBasedBuilder):
       for key, example in self._generate_examples_validation(archive,
                                                              validation_labels):
         yield key, example
+    
+    minival_fnames = self._get_minival_filenames()
     # Training split. Main archive contains archives names after a synset noun.
     # Each sub-archive contains pictures associated to that synset.
     for fname, fobj in archive:
@@ -240,6 +251,12 @@ class Imagenet2012(tfds.core.GeneratorBasedBuilder):
       fobj_mem = io.BytesIO(fobj.read())
       for image_fname, image in tfds.download.iter_archive(
           fobj_mem, tfds.download.ExtractMethod.TAR_STREAM):
+
+        if minival and image_fname not in minival_fnames:
+          continue
+        if (not minival) and image_fname in minival_fnames:
+          continue
+        
         image = self._fix_image(image_fname, image)
         record = {
             'file_name': image_fname,
