@@ -569,8 +569,7 @@ class DatasetBuilder(object):
       ds = ds.map(lambda fs: (fs[input_f], fs[target_f]),
                   num_parallel_calls=tf.data.experimental.AUTOTUNE)
 
-    # If skip_prefetch is False, allow the pipeline
-    # to prefetch items
+    # Add prefetch by default
     if not read_config.skip_prefetch:
       ds = ds.prefetch(tf.data.experimental.AUTOTUNE)
 
